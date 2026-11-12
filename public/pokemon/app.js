@@ -5,6 +5,9 @@ const STORE = 'pogo-afvinkboek-v1';
 const LIVE = 'https://raw.githubusercontent.com/bigfoott/ScrapedDuck/data/';
 const SPRITE = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/';
 const HOME3D = SPRITE + 'other/home/'; // 3D-renders uit Pokémon HOME
+// Als Claude-artifact zijn externe afbeeldingen en verzoeken geblokkeerd: dan komen de plaatjes uit
+// meegebundelde sprite-sheets en gaan vinkjes en live-gegevens via de opslag van het artifact.
+const ART = window.POKEDEX_ART || null;
 
 const CATS = [
   { id: 'normal', label: 'Gevangen' },
@@ -39,7 +42,7 @@ const CLS = { legendary: 'Legendarisch', mythical: 'Mythisch', ultrabeast: 'Ultr
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const norm = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const num = n => '#' + String(n).padStart(4, '0');
 
 let DATA = null;
@@ -57,11 +60,69 @@ try { state = JSON.parse(localStorage.getItem(STORE)) || {}; } catch { state = {
 
 function save() {
   try { localStorage.setItem(STORE, JSON.stringify(state)); } catch { /* opslag niet beschikbaar */ }
+  if (cloud) { cloudDirty = true; clearTimeout(cloudTimer); cloudTimer = setTimeout(pushCloud, 1200); }
 }
 const has = key => !!state[key];
 function set(key, on) {
   if (on) state[key] = 1; else delete state[key];
+  touched.set(key, on);
   save();
+}
+
+/* ---------- Opslag bij het artifact (alleen in de artifact-versie) ---------- */
+
+let cloud = null;            // document met de vinkjes van deze gebruiker
+let cloudTimer = 0, cloudBusy = false, cloudDirty = false;
+const touched = new Map();   // wat er is aan- of uitgevinkt voordat de opslag geladen was
+
+function setSync(cls, text) {
+  const el = $('#syncstate');
+  el.className = 'syncline ' + cls;
+  el.querySelector('span').textContent = text;
+}
+async function pushCloud() { // één schrijfactie tegelijk
+  if (cloudBusy || !cloud) return;
+  cloudBusy = true;
+  while (cloudDirty) {
+    cloudDirty = false;
+    try {
+      await cloud.set({ keys: Object.keys(state), at: Date.now() });
+      setSync('ok', 'Opgeslagen bij je account');
+    } catch {
+      setSync('err', 'Opslaan lukt nu niet — je vinkjes staan wel op dit toestel');
+      break;
+    }
+  }
+  cloudBusy = false;
+}
+async function initCloud() {
+  const use = window.claude && window.claude.use ? n => window.claude.use(n).catch(() => null) : () => null;
+  const [db, user] = await Promise.all([use('db'), use('user')]);
+  if (!db) return setSync('', 'Niet aangemeld — vinkjes blijven alleen op dit toestel');
+  db.doc('live/current').get().then(snap => { // nieuwere live-gegevens dan de meegebundelde
+    const d = snap.exists && snap.data();
+    if (d && d.json && (!liveAt || d.updated > liveAt)) setLive(JSON.parse(d.json));
+  }).catch(() => {});
+  const id = user && await user.id();
+  if (!id) return setSync('', 'Niet aangemeld — vinkjes blijven alleen op dit toestel');
+  try {
+    const ref = db.doc(`data/users/${id}/ticks`);
+    const snap = await ref.get();
+    if (snap.exists) { // de opslag is leidend; wat je net al aantikte blijft staan
+      const next = {};
+      for (const k of snap.data().keys || []) next[k] = 1;
+      for (const [k, on] of touched) { if (on) next[k] = 1; else delete next[k]; }
+      state = next;
+    }
+    cloud = ref;
+    setSync('ok', 'Opgeslagen bij je account');
+    if (!snap.exists ? Object.keys(state).length : touched.size) save(); else { try { localStorage.setItem(STORE, JSON.stringify(state)); } catch { /* geen opslag */ } }
+    renderGrid();
+    renderStats();
+    if (sheet) renderSheet(true);
+  } catch {
+    setSync('err', 'Opslag niet bereikbaar — vinkjes blijven op dit toestel');
+  }
 }
 
 /* ---------- Afbeeldingen ---------- */
@@ -76,8 +137,15 @@ function img(urls, cls) {
   const [first, ...rest] = urls.filter((u, i, a) => u && a.indexOf(u) === i);
   return `<img class="${cls || ''}" loading="lazy" decoding="async" alt="" draggable="false" src="${esc(first)}"${rest.length ? ` data-fb="${esc(rest.join('|'))}"` : ''}>`;
 }
-const iconTag = (p, shiny, v) => img([iconUrl(p, shiny, v), `${SPRITE}${shiny ? 'shiny/' : ''}${p.n}.png`]);
+function spr(kind, i, cls) { // tegel i uit een meegebundelde sprite-sheet
+  const s = ART[kind], j = i % s.per, rows = s.per / s.cols;
+  return `<span class="spr ${cls || ''}" style="background-image:url(${kind}${Math.floor(i / s.per)}.webp);background-size:${s.cols * 100}% ${rows * 100}%;` +
+    `background-position:${(j % s.cols) / (s.cols - 1) * 100}% ${Math.floor(j / s.cols) / (rows - 1) * 100}%"></span>`;
+}
+const iconTag = (p, shiny, v) => ART ? (v ? spr('v', v.k) : spr(shiny ? 'ts' : 't', p.i))
+  : img([iconUrl(p, shiny, v), `${SPRITE}${shiny ? 'shiny/' : ''}${p.n}.png`]);
 function modelTag(p, shiny, v) {
+  if (ART) return v ? spr('v', v.k, 'model') : spr(shiny ? 'ms' : 'm', p.i, 'model');
   const s = shiny ? 'shiny/' : '';
   return img(v ? [iconUrl(p, shiny, v), `${HOME3D}${s}${p.n}.png`]
     : [`${HOME3D}${s}${p.n}.png`, iconUrl(p, shiny), `${SPRITE}other/official-artwork/${s}${p.n}.png`, `${SPRITE}${s}${p.n}.png`], 'model');
@@ -263,7 +331,7 @@ function openSheet(p) {
   if (wasOpen) return;
   $('#sheet').hidden = false;
   document.body.classList.add('locked');
-  history.pushState({ sheet: true }, '');
+  if (!ART) history.pushState({ sheet: true }, ''); // terug-knop sluit het detailscherm
 }
 function closeSheet() { // via terug-knop of sluitknop
   if (!sheet) return;
@@ -339,7 +407,7 @@ function liveCard(item, sub, name) {
   const n = liveN(item, name);
   const p = byN.get(n);
   const file = /[^/]+$/.exec(item.image || '');
-  const pic = img([file && DATA.imgBase + file[0], p && iconUrl(p), n && `${SPRITE}${n}.png`]);
+  const pic = ART ? (p ? iconTag(p) : '') : img([file && DATA.imgBase + file[0], p && iconUrl(p), n && `${SPRITE}${n}.png`]);
   return `<button class="lcard" ${n ? `data-n="${n}"` : 'disabled'}>${pic}
     <b>${esc(item.name)}${item.canBeShiny ? ' <span class="spark" title="Shiny mogelijk">✨</span>' : ''}</b>${sub ? `<span>${sub}</span>` : ''}</button>`;
 }
@@ -365,28 +433,35 @@ function renderLive() {
     html = live.research.map(t => `<div class="task"><p>${esc(taskText(t))}</p><div class="lgrid">${
       (t.rewards || []).map(r => liveCard(r, '')).join('')}</div></div>`).join('');
   }
-  el.innerHTML = (html || '<p class="empty">Niets gevonden.</p>') + '<p class="muted small foot">Bron: LeekDuck (via ScrapedDuck). ✨ = shiny mogelijk. Tik op een Pokémon voor details.</p>';
+  el.innerHTML = (html || '<p class="empty">Niets gevonden.</p>') + `<p class="muted small foot">Bron: LeekDuck (via ScrapedDuck)${liveAt ? ` · bijgewerkt op ${new Date(liveAt).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long' })}` : ''}. ✨ = shiny mogelijk. Tik op een Pokémon voor details.</p>`;
 }
 
-async function loadLive() {
-  live = null;
-  $('#livestate').className = 'livestate';
-  renderLive();
-  try {
-    const [raids, eggs, research] = await Promise.all(['raids', 'eggs', 'research'].map(async f => {
-      const r = await fetch(`${LIVE}${f}.min.json`);
-      if (!r.ok) throw new Error(r.status);
-      return r.json();
-    }));
-    live = { raids, eggs, research };
-    indexLive();
-  } catch {
-    live = false;
-  }
+let liveAt = ''; // moment waarop de live-gegevens zijn opgehaald (alleen bekend in de artifact-versie)
+function setLive(d) {
+  live = d ? { raids: d.raids || [], eggs: d.eggs || [], research: d.research || [] } : false;
+  liveAt = (d && d.updated) || '';
+  if (live) indexLive();
   $('#livestate').className = 'livestate ' + (live ? 'on' : 'off');
   renderLive();
   renderGrid();
   if (sheet) renderSheet(true);
+}
+async function loadLive() {
+  live = null;
+  $('#livestate').className = 'livestate';
+  renderLive();
+  const get = async url => {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status);
+    return r.json();
+  };
+  try {
+    if (ART) return setLive(await get('live.json'));
+    const [raids, eggs, research] = await Promise.all(['raids', 'eggs', 'research'].map(f => get(`${LIVE}${f}.min.json`)));
+    setLive({ raids, eggs, research });
+  } catch {
+    setLive(null);
+  }
 }
 
 /* ---------- Events ---------- */
@@ -469,13 +544,14 @@ function wire() {
 
   // Detailscherm
   wireStage();
-  $('#close').addEventListener('click', () => history.back());
+  const back = () => (ART ? closeSheet() : history.back());
+  $('#close').addEventListener('click', back);
   for (const id of ['#prev', '#next']) $(id).addEventListener('click', e => {
     const n = +e.currentTarget.dataset.n;
     if (n) openSheet(byN.get(n));
   });
   addEventListener('popstate', closeSheet);
-  addEventListener('keydown', e => { if (e.key === 'Escape' && sheet) history.back(); });
+  addEventListener('keydown', e => { if (e.key === 'Escape' && sheet) back(); });
   document.addEventListener('change', e => {
     if (!e.target.dataset.key) return;
     set(e.target.dataset.key, e.target.checked);
@@ -539,10 +615,13 @@ function wire() {
     $('#grid').innerHTML = `<p class="empty">Pokémon-data kon niet geladen worden (${esc(err.message)}).</p>`;
     return;
   }
-  for (const p of DATA.pokemon) {
+  let k = 0;
+  DATA.pokemon.forEach((p, i) => {
+    p.i = i; // plek in de sprite-sheets
+    for (const v of p.variants || []) v.k = k++;
     p.search = [p.name, ...p.alt].map(norm);
     byN.set(p.n, p);
-  }
+  });
   const gens = [...new Set(DATA.pokemon.map(p => p.gen))].sort((a, b) => a - b);
   $('#gen').insertAdjacentHTML('beforeend', gens.map(g => `<option value="${g}">Gen ${g}</option>`).join(''));
   $('#foot').textContent = `Data van ${DATA.built} · bronnen: pokemon-go-api, PoGoAPI.net, LeekDuck (ScrapedDuck), PokeAPI-sprites. ` +
@@ -550,5 +629,11 @@ function wire() {
   wire();
   renderGrid();
   loadLive();
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (ART) {
+    $('#synccard').hidden = false;
+    $('#localcards').hidden = true;
+    initCloud();
+  } else if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
 })();

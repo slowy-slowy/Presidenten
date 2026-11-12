@@ -12,6 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,600;0,700;1,700&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -58,6 +59,12 @@
       <section id="view-meer" class="view" hidden>
         <h2 class="vtitle">Mijn voortgang</h2>
         <div id="stats" class="stats"></div>
+        <div id="synccard" hidden>
+          <h2 class="vtitle">Opslag</h2>
+          <div class="card"><p id="syncstate" class="syncline"><i></i><span>Verbinden…</span></p>
+            <p class="muted">Je vinkjes worden bij je Claude-account bewaard en zijn op al je toestellen hetzelfde.</p></div>
+        </div>
+        <div id="localcards">
         <h2 class="vtitle">Back-up</h2>
         <div class="card">
           <p>Je vinkjes staan alleen op dit toestel. Maak af en toe een back-up.</p>
@@ -71,6 +78,7 @@
         <div class="card">
           <p><b>iPhone:</b> Deel-knop → <i>Zet op beginscherm</i>.<br><b>Android:</b> menu ⋮ → <i>App installeren</i> of <i>Toevoegen aan startscherm</i>.</p>
           <p class="muted">Daarna opent de Pokédex als een eigen app, schermvullend.</p>
+        </div>
         </div>
         <p id="foot" class="muted foot"></p>
       </section>
