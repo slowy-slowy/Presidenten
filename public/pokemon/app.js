@@ -386,6 +386,8 @@ function renderGrid() {
   $('#cathint').textContent = cat.variant ? `Tik op een Pokémon om de afzonderlijke ${cat.label.toLowerCase()} af te vinken.`
     : cat.applies && !hits ? `Je ziet alleen Pokémon waarvoor ${cat.label} bestaat.` : '';
   $('#quick').closest('.quick').hidden = !!cat.variant;
+  $('#quickcats').hidden = !$('#quick').checked || !!cat.variant;
+  for (const b of $('#quickcats').children) b.setAttribute('aria-pressed', b.dataset.cat === cat.id);
 }
 
 function renderStats() {
@@ -526,6 +528,15 @@ function wire() {
     e.target.blur();
     if (visible.length === 1) openSheet(byN.get(visible[0]));
   });
+
+  // Bij snel afvinken kies je met één tik wat je afvinkt; de meest gebruikte staan vooraan.
+  $('#quickcats').innerHTML = ['normal', 'shiny', 'xxl', 'xxs', 'hundo', 'lucky', 'shadow', 'purified', 'mega', 'dmax', 'gmax', 'bgloc', 'bgspecial']
+    .map(id => `<button class="pill qc" data-cat="${id}">${CATS.find(c => c.id === id).label}</button>`).join('');
+  $('#quickcats').addEventListener('click', e => {
+    const b = e.target.closest('[data-cat]');
+    if (b) setCat(b.dataset.cat);
+  });
+  $('#quick').addEventListener('input', renderGrid);
 
   $('#grid').addEventListener('click', e => {
     const tile = e.target.closest('.tile');
