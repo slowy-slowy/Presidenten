@@ -1,9 +1,10 @@
 'use strict';
-// Pokémon GO Dashboard: opzoeken + afvinkboek. Voortgang staat in localStorage van deze browser.
+// Pokédex GO: opzoeken, live-beschikbaarheid en afvinkboek. Voortgang staat in localStorage van deze browser.
 
 const STORE = 'pogo-afvinkboek-v1';
 const LIVE = 'https://raw.githubusercontent.com/bigfoott/ScrapedDuck/data/';
 const SPRITE = 'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/';
+const HOME3D = SPRITE + 'other/home/'; // 3D-renders uit Pokémon HOME
 
 const CATS = [
   { id: 'normal', label: 'Gevangen' },
@@ -25,18 +26,32 @@ const CATS = [
 const TYPES = { normal: 'Normaal', fire: 'Vuur', water: 'Water', grass: 'Gras', electric: 'Elektrisch', ice: 'IJs',
   fighting: 'Vecht', poison: 'Gif', ground: 'Grond', flying: 'Vlieg', psychic: 'Psychisch', bug: 'Insect',
   rock: 'Steen', ghost: 'Geest', dragon: 'Draak', dark: 'Duister', steel: 'Staal', fairy: 'Fee' };
-const SHINY_VIA = { wild: 'in het wild', raid: 'raids', egg: 'eieren', research: 'research', evolution: 'evolutie', photobomb: 'snapshot-photobomb' };
+const TYPE_COLOR = { normal: '#9a9a6b', fire: '#ee8130', water: '#5a8bea', grass: '#5fae3b', electric: '#e0b400', ice: '#5fbfbb',
+  fighting: '#c22e28', poison: '#a33ea1', ground: '#c9a04a', flying: '#8f79e6', psychic: '#f0457a', bug: '#93a516',
+  rock: '#a8922f', ghost: '#735797', dragon: '#6f35fc', dark: '#705746', steel: '#8989a8', fairy: '#d06ca6' };
+const WEATHER = [
+  ['☀️ Zonnig', ['grass', 'ground', 'fire']], ['🌧️ Regen', ['water', 'electric', 'bug']],
+  ['⛅ Half bewolkt', ['normal', 'rock']], ['☁️ Bewolkt', ['fairy', 'fighting', 'poison']],
+  ['💨 Wind', ['dragon', 'flying', 'psychic']], ['❄️ Sneeuw', ['ice', 'steel']], ['🌫️ Mist', ['dark', 'ghost']],
+];
+const SHINY_VIA = { wild: 'in het wild', raid: 'raids', egg: 'eieren', research: 'research', evolution: 'evolutie', photobomb: 'snapshot' };
 const CLS = { legendary: 'Legendarisch', mythical: 'Mythisch', ultrabeast: 'Ultra Beast' };
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const num = n => '#' + String(n).padStart(4, '0');
 
 let DATA = null;
+let REG = {};          // regionale info per Pokédex-nummer
 let byN = new Map();
-let live = null; // { raids, eggs, research } of false als ophalen mislukte
+let live = null;       // { raids, eggs, research } of false als ophalen mislukte
+let liveByN = new Map();
+let liveTab = 'raids';
 let cat = CATS[0];
-let current = null; // Pokémon in het opzoek-tabblad
+let visible = [];      // nummers in de huidige lijst (voor vorige/volgende)
+let sheet = null;      // { p, shiny, variant } van het geopende detailscherm
+let gridDirty = false;
 let state = {};
 try { state = JSON.parse(localStorage.getItem(STORE)) || {}; } catch { state = {}; }
 
@@ -49,121 +64,216 @@ function set(key, on) {
   save();
 }
 
-function imgUrl(p, shiny, v) {
+/* ---------- Afbeeldingen ---------- */
+
+function iconUrl(p, shiny, v) {
   const src = v || p;
   const file = shiny ? src.simg || src.img : src.img;
   return file ? DATA.imgBase + file : SPRITE + (shiny ? 'shiny/' : '') + p.n + '.png';
 }
-function imgTag(p, shiny, v) {
-  return `<img loading="lazy" alt="" src="${esc(imgUrl(p, shiny, v))}" data-fallback="${SPRITE}${shiny ? 'shiny/' : ''}${p.n}.png">`;
+// Probeert de bronnen in data-fb één voor één als een afbeelding ontbreekt.
+function img(urls, cls) {
+  const [first, ...rest] = urls.filter((u, i, a) => u && a.indexOf(u) === i);
+  return `<img class="${cls || ''}" loading="lazy" decoding="async" alt="" draggable="false" src="${esc(first)}"${rest.length ? ` data-fb="${esc(rest.join('|'))}"` : ''}>`;
 }
-// Ontbrekende iconen vallen terug op de PokeAPI-sprite.
+const iconTag = (p, shiny, v) => img([iconUrl(p, shiny, v), `${SPRITE}${shiny ? 'shiny/' : ''}${p.n}.png`]);
+function modelTag(p, shiny, v) {
+  const s = shiny ? 'shiny/' : '';
+  return img(v ? [iconUrl(p, shiny, v), `${HOME3D}${s}${p.n}.png`]
+    : [`${HOME3D}${s}${p.n}.png`, iconUrl(p, shiny), `${SPRITE}other/official-artwork/${s}${p.n}.png`, `${SPRITE}${s}${p.n}.png`], 'model');
+}
 document.addEventListener('error', e => {
   const t = e.target;
-  if (t.tagName === 'IMG' && t.dataset.fallback) { const f = t.dataset.fallback; delete t.dataset.fallback; t.src = f; }
+  if (t.tagName !== 'IMG' || !t.dataset.fb) return;
+  const [next, ...rest] = t.dataset.fb.split('|');
+  if (rest.length) t.dataset.fb = rest.join('|'); else delete t.dataset.fb;
+  t.src = next;
 }, true);
 
-/* ---------- Opzoeken ---------- */
+/* ---------- Gegevens per Pokémon ---------- */
+
+const region = p => REG[p.n] || null;
+const isRegional = p => !!region(p);
 
 function search(q) {
   q = norm(q.trim().replace(/^#/, ''));
-  if (!q) return [];
+  if (!q) return null;
   if (/^\d+$/.test(q)) {
     const exact = byN.get(+q);
     const rest = DATA.pokemon.filter(p => p !== exact && String(p.n).startsWith(q));
     return (exact ? [exact] : []).concat(rest);
   }
-  const starts = [], contains = [];
+  const exact = [], starts = [], contains = [];
   for (const p of DATA.pokemon) {
     const names = p.search;
-    if (names.includes(q)) starts.unshift(p); // exacte naam bovenaan
+    if (names.includes(q)) exact.push(p);
     else if (names.some(n => n.startsWith(q))) starts.push(p);
     else if (names.some(n => n.includes(q))) contains.push(p);
   }
-  return starts.concat(contains);
+  return exact.concat(starts, contains);
 }
 
-function liveMatches(p) {
-  if (!live) return null;
-  const re = new RegExp('(?<![\\w-])' + p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w-])', 'i');
-  const out = [];
-  for (const r of live.raids) if (re.test(r.name)) out.push(`Raid: ${r.name} (${r.tier})${r.canBeShiny ? ' — shiny mogelijk' : ''}`);
-  for (const e of live.eggs) if (re.test(e.name)) out.push(`Ei: ${e.name} uit ${e.eggType}-eieren${e.isAdventureSync ? ' (Adventure Sync)' : ''}${e.canBeShiny ? ' — shiny mogelijk' : ''}`);
+function liveN(item, fallbackName) { // Pokédex-nummer bij een live-item
+  const m = /pm(\d+)\./.exec(item.image || '');
+  if (m) return +m[1];
+  const hit = DATA.pokemon.find(p => norm(fallbackName || item.name).includes(norm(p.name)));
+  return hit ? hit.n : 0;
+}
+function indexLive() {
+  liveByN = new Map();
+  const add = (n, o) => { if (n) (liveByN.get(n) || liveByN.set(n, []).get(n)).push(o); };
+  for (const r of live.raids) add(liveN(r), { icon: '⚔️', title: `Raid · ${tierLabel(r.tier)}`, sub: r.name, shiny: r.canBeShiny });
+  for (const e of live.eggs) add(liveN(e), { icon: '🥚', title: `Ei · ${e.eggType}${eggExtra(e)}`, sub: e.name, shiny: e.canBeShiny });
   for (const t of live.research) for (const r of t.rewards || []) {
-    if (re.test(r.name)) out.push(`Research: ${r.name} — “${t.text.replace(/<[^>]*>/g, '')}”${r.canBeShiny ? ' — shiny mogelijk' : ''}`);
+    add(liveN(r), { icon: '📋', title: 'Research-taak', sub: `${r.name} — “${taskText(t)}”`, shiny: r.canBeShiny });
   }
-  return out;
+}
+const taskText = t => String(t.text || '').replace(/<[^>]*>/g, '');
+const eggExtra = e => (e.isAdventureSync ? ' (Adventure Sync)' : e.isGiftExchange ? ' (uit cadeaus)' : '') + (e.isRegional ? ' · regionaal' : '');
+function tierLabel(t) {
+  const m = /^(\d)-Star/.exec(t || '');
+  if (m) return '★'.repeat(+m[1]) + ` ${m[1]} ${m[1] === '1' ? 'ster' : 'sterren'}`;
+  return String(t || 'Raid').replace(/ Raids?$/, '');
 }
 
-function availability(p) {
+function sources(p) { // waar/hoe je deze Pokémon krijgt
   const a = [];
-  if (!p.released) a.push('Nog niet uitgebracht in Pokémon GO (volgens de momentopname).');
-  if (p.cls) a.push(`${CLS[p.cls]}: meestal alleen via raids, speciale research of evenementen.`);
-  if (p.nest) a.push('Komt voor in nesten, dus te vangen in het wild.');
-  if (p.baby) a.push('Baby-Pokémon: alleen uit eieren.');
-  if (p.raid) a.push(`Raid-exclusief (niveau ${p.raid}).`);
-  if (p.research) a.push('Alleen via research-taken.');
-  if (p.evo) a.push(`Evolueert uit ${p.evo.from}${p.evo.candies ? ` (${p.evo.candies} candy${p.evo.item ? ' + ' + p.evo.item : ''})` : ''}.`);
-  if (p.ditto) a.push('Kan een vermomde Ditto zijn.');
-  if (p.shadow) a.push('Als Shadow te redden van Team GO Rocket (daarna te zuiveren).');
-  if (p.mega) a.push(`Mega-evolutie: ${p.mega.join(', ')} (Mega Energy uit mega-raids).`);
-  if (p.gmax) a.push('Gigantamax-vorm via Max Battles.');
-  if (p.cd) a.push(`Community Day gehad op: ${p.cd.join(', ')}.`);
-  if (p.released && a.length === 0) a.push('Uitgebracht; geen bijzondere bron bekend in de data — doorgaans in het wild of via evenementen.');
+  if (!p.released) a.push(['⏳', 'Nog niet uitgebracht in Pokémon GO.']);
+  if (p.cls) a.push(['👑', `${CLS[p.cls]}: meestal via raids, speciale research of evenementen.`]);
+  if (p.nest) a.push(['🌳', 'In het wild — komt ook voor in nesten (parken).']);
+  if (p.baby) a.push(['🥚', 'Baby-Pokémon: alleen uit eieren.']);
+  if (p.raid) a.push(['⚔️', `Alleen via raids (niveau ${p.raid}).`]);
+  if (p.research) a.push(['📋', 'Alleen via research-taken.']);
+  if (p.evo) a.push(['⬆️', `Evolueert uit ${p.evo.from}${p.evo.candies ? ` (${p.evo.candies} candy${p.evo.item ? ' + ' + p.evo.item : ''})` : ''}.`]);
+  if (p.ditto) a.push(['🟣', 'Kan een vermomde Ditto zijn.']);
+  if (p.shadow) a.push(['🚀', 'Als Shadow te redden van Team GO Rocket.']);
+  if (p.mega) a.push(['💎', `Mega-evolutie: ${p.mega.join(', ')}.`]);
+  if (p.gmax) a.push(['🌀', 'Gigantamax-vorm via Max Battles.']);
+  if (p.released && !a.length) a.push(['🌿', 'In het wild of via evenementen.']);
   return a;
 }
+const weatherOf = p => WEATHER.filter(([, ts]) => p.types.some(t => ts.includes(t))).map(([w]) => w);
 
-function checkbox(key, label, extra) {
-  return `<label class="${extra || ''}"><input type="checkbox" data-key="${esc(key)}"${has(key) ? ' checked' : ''}> ${esc(label)}</label>`;
+/* ---------- Detailscherm ---------- */
+
+function regionHTML(p) {
+  const r = region(p);
+  if (!r) return `<div class="regbox global"><b>🌐 Niet regionaal</b><span>Wereldwijd te vinden — geen vaste spawnregio.</span></div>`;
+  const here = h => (h ? '<em class="here">✓ NL/BE</em>' : '<em class="nothere">✕ niet in NL/BE</em>');
+  const forms = (r.forms || []).map(f => `<li><b>${esc(f.label)}</b><span>${esc(f.where)}</span>${here(f.here)}</li>`).join('');
+  return `<div class="regbox ${r.partial ? 'partial' : 'regional'}">
+    <b>📍 ${r.partial ? 'Regionale vormen' : 'Regionaal'}</b>
+    ${r.where ? `<span class="where">${esc(r.where)}</span>${here(r.here)}` : ''}
+    ${r.note ? `<span>${esc(r.note)}</span>` : ''}
+    ${forms ? `<ul class="regforms">${forms}</ul>` : ''}
+    <small>Tijdens evenementen of via ruilen soms ook buiten de regio te krijgen.</small></div>`;
 }
 
-function detailHTML(p) {
-  const types = p.types.map(t => `<span class="badge">${TYPES[t] || t}</span>`).join('');
-  const shiny = p.shiny
-    ? `<span class="badge">Shiny: ${p.shiny.map(k => SHINY_VIA[k]).join(', ') || 'beschikbaar'}</span>`
-    : '<span class="badge no">Shiny niet beschikbaar</span>';
-  const lm = liveMatches(p);
-  const liveHTML = lm === null
-    ? `<p class="muted">${live === false ? 'Live-gegevens zijn nu niet bereikbaar.' : 'Live-gegevens laden…'}</p>`
-    : lm.length ? `<ul>${lm.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`
-      : '<p class="muted">Staat nu niet in de lijst van raids, eieren of research-taken.</p>';
+function liveHTML(p) {
+  if (live === null) return '<p class="muted">Live-gegevens laden…</p>';
+  if (live === false) return '<p class="muted">Live-gegevens zijn nu niet bereikbaar.</p>';
+  const items = liveByN.get(p.n) || [];
+  if (!items.length) return '<p class="muted">Zit nu niet in raids, eieren of research-taken.</p>';
+  return `<ul class="rows live">${items.map(x => `<li><i>${x.icon}</i><div><b>${esc(x.title)}${x.shiny ? ' <span class="spark" title="Shiny mogelijk">✨</span>' : ''}</b><span>${esc(x.sub)}</span></div></li>`).join('')}</ul>`;
+}
+
+function toggle(key, label, extra) {
+  return `<label class="tog check ${extra || ''}"><input type="checkbox" data-key="${esc(key)}"${has(key) ? ' checked' : ''}><span>${esc(label)}</span></label>`;
+}
+
+function detailHTML() {
+  const { p, shiny, variant } = sheet;
+  const c1 = TYPE_COLOR[p.types[0]] || '#888', c2 = TYPE_COLOR[p.types[1] || p.types[0]] || c1;
+  const types = p.types.map(t => `<span class="type" style="--t:${TYPE_COLOR[t]}">${TYPES[t] || t}</span>`).join('');
+  const r = region(p);
+  const facts = [
+    `<span class="fact">Gen ${p.gen}</span>`,
+    p.cls ? `<span class="fact gold">${CLS[p.cls]}</span>` : '',
+    r ? `<span class="fact reg">📍 ${r.partial ? 'Regionale vormen' : 'Regionaal'}</span>` : '<span class="fact">🌐 Wereldwijd</span>',
+    p.released ? '' : '<span class="fact no">Nog niet in GO</span>',
+  ].join('');
+  const shinyLine = p.shiny
+    ? `✨ Shiny via ${p.shiny.map(k => SHINY_VIA[k]).join(', ') || 'evenementen'}`
+    : '✨ Shiny nog niet beschikbaar';
+  const weather = weatherOf(p);
   const checks = CATS.filter(c => !c.variant)
-    .map(c => checkbox(`${p.n}:${c.id}`, c.label, c.applies && !c.applies(p) ? 'na' : '')).join('');
-  const groups = ['costume', 'form'].map(kind => {
+    .map(c => toggle(`${p.n}:${c.id}`, c.label, c.applies && !c.applies(p) ? 'na' : '')).join('');
+  const groups = ['form', 'costume'].map(kind => {
     const vs = (p.variants || []).filter(v => v.kind === kind);
     if (!vs.length) return '';
-    return `<h3>${kind === 'costume' ? 'Kostuums' : 'Vormen'} (${vs.length})</h3><div class="variants">${vs.map(v => `
-      <div class="variant">${imgTag(p, false, v)}<div>${esc(v.label)}</div>
-        <div class="row">${checkbox(`${p.n}:v:${v.id}`, 'Heb ik')}${checkbox(`${p.n}:vs:${v.id}`, 'Shiny')}</div>
-      </div>`).join('')}</div>`;
+    return `<details class="card vgroup"${vs.length <= 6 ? ' open' : ''}><summary>${kind === 'costume' ? 'Kostuums' : 'Vormen'} <span class="count">${vs.length}</span></summary>
+      <div class="variants">${vs.map(v => `
+      <div class="variant${variant === v ? ' on' : ''}">
+        <button class="vimg" data-variant="${esc(v.id)}" aria-label="Bekijk ${esc(v.label)}">${iconTag(p, false, v)}</button>
+        <div class="vname">${esc(v.label)}</div>
+        <div class="vrow">${toggle(`${p.n}:v:${v.id}`, 'Heb ik')}${toggle(`${p.n}:vs:${v.id}`, '✨')}</div>
+      </div>`).join('')}</div></details>`;
   }).join('');
-  return `<article class="detail" data-n="${p.n}">
-    <div class="head">${imgTag(p, false)}${imgTag(p, true)}
-      <div><h2>#${String(p.n).padStart(4, '0')} ${esc(p.name)}</h2>
-        <div>${types}<span class="badge">Generatie ${p.gen}</span>${shiny}</div>
-        ${p.alt.length ? `<div class="muted">Ook bekend als: ${esc(p.alt.join(', '))}</div>` : ''}</div>
+
+  return `<article class="detail" style="--c1:${c1};--c2:${c2}">
+    <div class="stage${shiny ? ' shiny' : ''}">
+      <span class="stnum">${num(p.n)}</span>
+      <button class="shinybtn" data-shiny aria-pressed="${shiny}" ${p.shiny || p.simg ? '' : 'hidden'}>✨ Shiny</button>
+      <div class="fig"><div class="float">${modelTag(p, shiny, variant)}</div></div>
+      <div class="shadow"></div>
+      <div class="sthint">sleep om te draaien · tik voor een rondje</div>
     </div>
-    <h3>Hoe te krijgen</h3><ul>${availability(p).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-    <h3>Nu actief (live via LeekDuck)</h3>${liveHTML}
-    <h3>Afvinken</h3><div class="checks">${checks}</div>
-    <p class="muted">Vaag weergegeven vakjes bestaan volgens de data (nog) niet voor deze Pokémon, maar je kunt ze wel aanvinken.</p>
+    <div class="dhead">
+      <h2>${esc(p.name)}${variant ? ` <small>${esc(variant.label)}</small>` : ''}</h2>
+      <div class="types">${types}</div>
+      <div class="facts">${facts}</div>
+    </div>
+
+    <section class="card"><h3>Waar te vinden</h3>
+      ${regionHTML(p)}
+      <ul class="rows">${sources(p).map(([i, x]) => `<li><i>${i}</i><div><span>${esc(x)}</span></div></li>`).join('')}
+        <li><i>✨</i><div><span>${esc(shinyLine.slice(2))}</span></div></li>
+        ${weather.length ? `<li><i>🌦️</i><div><span>Vaker bij dit weer: ${weather.join(', ')}</span></div></li>` : ''}
+      </ul></section>
+
+    <section class="card livecard"><h3><span class="dot"></span>Nu live te krijgen</h3>${liveHTML(p)}</section>
+
+    <section class="card"><h3>Mijn collectie</h3><div class="checks">${checks}</div>
+      <p class="muted small">Vaag = bestaat (nog) niet voor deze Pokémon, maar aanvinken kan wel.</p></section>
     ${groups}
+    ${p.alt.length ? `<p class="muted small alt">Ook bekend als: ${esc(p.alt.join(' · '))}</p>` : ''}
   </article>`;
 }
 
-function showResult(p) {
-  current = p;
-  $('#result').innerHTML = detailHTML(p);
+function renderSheet(keepScroll) {
+  const body = $('#sheetbody');
+  const top = body.scrollTop;
+  body.innerHTML = detailHTML();
+  body.scrollTop = keepScroll ? top : 0;
+  const i = visible.indexOf(sheet.p.n);
+  const list = i >= 0 ? visible : DATA.pokemon.map(p => p.n);
+  const j = list.indexOf(sheet.p.n);
+  for (const [id, n] of [['#prev', list[j - 1]], ['#next', list[j + 1]]]) {
+    const b = $(id);
+    b.disabled = !n;
+    b.dataset.n = n || '';
+    b.querySelector('span').textContent = n ? byN.get(n).name : '';
+  }
 }
 
-function onQuery() {
-  const hits = search($('#q').value).slice(0, 12);
-  $('#suggest').innerHTML = hits.map(p => `<button data-pick="${p.n}">#${p.n} ${esc(p.name)}</button>`).join('');
-  if (hits.length) showResult(hits[0]); // beste treffer meteen tonen
-  else if ($('#q').value.trim() && !hits.length) { current = null; $('#result').innerHTML = '<p class="muted">Geen Pokémon gevonden.</p>'; }
+function openSheet(p) {
+  const wasOpen = !!sheet;
+  sheet = { p, shiny: cat.shinyImg && !!p.shiny, variant: null };
+  renderSheet();
+  if (wasOpen) return;
+  $('#sheet').hidden = false;
+  document.body.classList.add('locked');
+  history.pushState({ sheet: true }, '');
+}
+function closeSheet() { // via terug-knop of sluitknop
+  if (!sheet) return;
+  sheet = null;
+  $('#sheet').hidden = true;
+  document.body.classList.remove('locked');
+  if (gridDirty) { renderGrid(); renderStats(); }
 }
 
-/* ---------- Afvinkboek ---------- */
+/* ---------- Lijst ---------- */
 
 function variantsOf(p, kind) { return (p.variants || []).filter(v => v.kind === kind); }
 function progressOf(p) { // [afgevinkt, totaal] voor de huidige categorie
@@ -171,88 +281,223 @@ function progressOf(p) { // [afgevinkt, totaal] voor de huidige categorie
   const vs = variantsOf(p, cat.variant);
   return [vs.filter(v => has(`${p.n}:v:${v.id}`)).length, vs.length];
 }
-function inCategory(p) {
-  if (cat.variant) return variantsOf(p, cat.variant).length > 0;
-  if ($('#showall').checked) return true;
-  return p.released && (!cat.applies || !!cat.applies(p));
+function inCategory(p, c = cat) {
+  if (c.variant) return variantsOf(p, c.variant).length > 0;
+  return p.released && (!c.applies || !!c.applies(p));
 }
 
 function renderGrid() {
-  const f = norm($('#filter').value.trim().replace(/^#/, ''));
-  const gen = $('#gen').value;
-  const onlyMissing = $('#missing').checked;
+  gridDirty = false;
+  const hits = search($('#q').value);
+  const gen = $('#gen').value, type = $('#type').value;
+  const onlyMissing = $('#missing').checked, onlyRegional = $('#regional').checked;
   let done = 0, total = 0;
   const html = [];
-  for (const p of DATA.pokemon) {
-    if (!inCategory(p)) continue;
-    const [d, t] = progressOf(p);
+  visible = [];
+  for (const p of hits || DATA.pokemon) {
+    const applies = inCategory(p);
+    // Bij "Gevangen" en bij zoeken zie je de hele Pokédex; anders alleen wat in de categorie bestaat.
+    if (!applies && !hits && cat.id !== 'normal') continue;
     if (gen && String(p.gen) !== gen) continue;
+    if (type && !p.types.includes(type)) continue;
+    if (onlyRegional && !isRegional(p)) continue;
+    const [d, t] = applies ? progressOf(p) : [0, 0];
     done += d; total += t;
-    if (onlyMissing && d === t) continue;
-    if (f && !(String(p.n) === f || p.search.some(n => n.includes(f)))) continue;
-    const cls = d === t ? 'done' : d ? 'part' : '';
-    html.push(`<div class="tile ${cls}" data-n="${p.n}">
-      <button class="main" title="${cat.variant ? 'Open om af te vinken' : 'Klik om af te vinken'}">${imgTag(p, cat.shinyImg)}
-        <span class="num">#${p.n}</span><span>${esc(p.name)}</span>${cat.variant ? `<span class="num">${d}/${t}</span>` : ''}</button>
-      <button class="info" title="Details" aria-label="Details van ${esc(p.name)}">i</button></div>`);
+    if (onlyMissing && (!applies || d === t)) continue;
+    visible.push(p.n);
+    const cls = !applies ? 'na' : d === t ? 'done' : d ? 'part' : '';
+    html.push(`<button class="tile ${cls}" data-n="${p.n}" style="--t:${TYPE_COLOR[p.types[0]]}">
+      ${isRegional(p) ? '<i class="rg" title="Regionaal">📍</i>' : ''}${liveByN.has(p.n) ? '<i class="lv" title="Nu live"></i>' : ''}
+      ${iconTag(p, cat.shinyImg && !!p.shiny)}
+      <span class="num">${num(p.n)}</span><span class="nm">${esc(p.name)}</span>
+      ${cat.variant && applies ? `<span class="cnt">${d}/${t}</span>` : ''}</button>`);
   }
-  $('#grid').innerHTML = html.join('') || '<p class="muted">Niets te tonen met deze filters.</p>';
+  $('#grid').innerHTML = html.join('') || '<p class="empty">Geen Pokémon gevonden met deze filters.</p>';
   $('#bar').style.width = total ? (100 * done / total) + '%' : '0';
-  $('#progresstext').textContent = `${cat.label}: ${done} / ${total}${total ? ` (${Math.round(100 * done / total)}%)` : ''}`;
-  $('#cathint').textContent = cat.variant ? 'Klik op een Pokémon om de afzonderlijke ' + cat.label.toLowerCase() + ' af te vinken.'
-    : cat.applies && !$('#showall').checked ? 'Alleen Pokémon waarvoor deze categorie volgens de data bestaat. Mis je er één? Zet "Toon alles" aan.'
-      : ['dmax', 'bgloc', 'bgspecial'].includes(cat.id) ? 'Hiervoor is geen betrouwbare lijst per Pokémon beschikbaar; alle uitgebrachte Pokémon worden getoond.' : '';
+  $('#progresstext').textContent = `${cat.label}: ${done} / ${total}${total ? ` · ${Math.round(100 * done / total)}%` : ''}`;
+  $('#cathint').textContent = cat.variant ? `Tik op een Pokémon om de afzonderlijke ${cat.label.toLowerCase()} af te vinken.`
+    : cat.applies && !hits ? `Je ziet alleen Pokémon waarvoor ${cat.label} bestaat.` : '';
+  $('#quick').closest('.quick').hidden = !!cat.variant;
 }
 
-function openDialog(p) {
-  $('#dlgbody').innerHTML = detailHTML(p);
-  $('#dlg').showModal();
+function renderStats() {
+  $('#stats').innerHTML = CATS.map(c => {
+    let d = 0, t = 0;
+    for (const p of DATA.pokemon) {
+      if (!inCategory(p, c)) continue;
+      if (c.variant) { const vs = variantsOf(p, c.variant); t += vs.length; d += vs.filter(v => has(`${p.n}:v:${v.id}`)).length; }
+      else { t++; if (has(`${p.n}:${c.id}`)) d++; }
+    }
+    return `<button class="stat" data-cat="${c.id}"><span class="sl">${c.label}</span><span class="sv">${d} / ${t}</span>
+      <span class="sb"><i style="width:${t ? 100 * d / t : 0}%"></i></span></button>`;
+  }).join('');
+}
+
+/* ---------- Live ---------- */
+
+function liveCard(item, sub, name) {
+  const n = liveN(item, name);
+  const p = byN.get(n);
+  const file = /[^/]+$/.exec(item.image || '');
+  const pic = img([file && DATA.imgBase + file[0], p && iconUrl(p), n && `${SPRITE}${n}.png`]);
+  return `<button class="lcard" ${n ? `data-n="${n}"` : 'disabled'}>${pic}
+    <b>${esc(item.name)}${item.canBeShiny ? ' <span class="spark" title="Shiny mogelijk">✨</span>' : ''}</b>${sub ? `<span>${sub}</span>` : ''}</button>`;
+}
+function grouped(list, key) {
+  const m = new Map();
+  for (const x of list) (m.get(key(x)) || m.set(key(x), []).get(key(x))).push(x);
+  return [...m];
+}
+function renderLive() {
+  for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-selected', b.dataset.live === liveTab);
+  const el = $('#livebody');
+  if (live === null) { el.innerHTML = '<p class="empty">Live-gegevens laden…</p>'; return; }
+  if (live === false) { el.innerHTML = '<p class="empty">Live-gegevens zijn nu niet bereikbaar.</p><div class="btnrow center"><button class="btn" id="retry">Opnieuw proberen</button></div>'; return; }
+  let html = '';
+  if (liveTab === 'raids') {
+    html = grouped(live.raids, r => r.tier).map(([tier, rs]) => `<h3 class="lgroup">${esc(tierLabel(tier))}</h3><div class="lgrid">${
+      rs.map(r => liveCard(r, r.combatPower && r.combatPower.normal ? `CP ${r.combatPower.normal.min}–${r.combatPower.normal.max}` : '')).join('')}</div>`).join('');
+  } else if (liveTab === 'eggs') {
+    html = grouped(live.eggs, e => e.eggType + (e.isAdventureSync ? ' · Adventure Sync' : e.isGiftExchange ? ' · uit cadeaus' : ''))
+      .map(([type, es]) => `<h3 class="lgroup">🥚 ${esc(type)}</h3><div class="lgrid">${
+        es.map(e => liveCard(e, e.isRegional ? '📍 regionaal' : '')).join('')}</div>`).join('');
+  } else {
+    html = live.research.map(t => `<div class="task"><p>${esc(taskText(t))}</p><div class="lgrid">${
+      (t.rewards || []).map(r => liveCard(r, '')).join('')}</div></div>`).join('');
+  }
+  el.innerHTML = (html || '<p class="empty">Niets gevonden.</p>') + '<p class="muted small foot">Bron: LeekDuck (via ScrapedDuck). ✨ = shiny mogelijk. Tik op een Pokémon voor details.</p>';
+}
+
+async function loadLive() {
+  live = null;
+  $('#livestate').className = 'livestate';
+  renderLive();
+  try {
+    const [raids, eggs, research] = await Promise.all(['raids', 'eggs', 'research'].map(async f => {
+      const r = await fetch(`${LIVE}${f}.min.json`);
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    }));
+    live = { raids, eggs, research };
+    indexLive();
+  } catch {
+    live = false;
+  }
+  $('#livestate').className = 'livestate ' + (live ? 'on' : 'off');
+  renderLive();
+  renderGrid();
+  if (sheet) renderSheet(true);
 }
 
 /* ---------- Events ---------- */
 
-function selectTab(name) {
-  for (const b of document.querySelectorAll('.tabs button')) b.setAttribute('aria-selected', b.dataset.tab === name);
-  $('#tab-zoek').hidden = name !== 'zoek';
-  $('#tab-boek').hidden = name !== 'boek';
-  if (name === 'boek') renderGrid();
+function selectView(name) {
+  for (const b of document.querySelectorAll('.dex-nav button')) b.setAttribute('aria-current', b.dataset.view === name);
+  for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== 'view-' + name;
+  if (name === 'meer') renderStats();
+  window.scrollTo(0, 0);
+}
+function setCat(id) {
+  cat = CATS.find(c => c.id === id) || CATS[0];
+  $('#cat').value = cat.id;
+  renderGrid();
+}
+
+function wireStage() { // 3D-kantelen van het model
+  const body = $('#sheetbody');
+  const tilt = (stage, x, y) => {
+    const fig = stage.querySelector('.fig');
+    fig.style.setProperty('--ry', (x * 32).toFixed(1) + 'deg');
+    fig.style.setProperty('--rx', (-y * 16).toFixed(1) + 'deg');
+  };
+  body.addEventListener('pointermove', e => {
+    const stage = e.target.closest('.stage');
+    if (!stage) return;
+    const r = stage.getBoundingClientRect();
+    tilt(stage, ((e.clientX - r.left) / r.width) * 2 - 1, ((e.clientY - r.top) / r.height) * 2 - 1);
+  });
+  for (const ev of ['pointerleave', 'pointerup', 'pointercancel']) {
+    body.addEventListener(ev, e => { const s = e.target.closest && e.target.closest('.stage'); if (s) tilt(s, 0, 0); }, true);
+  }
+  body.addEventListener('click', e => {
+    if (e.target.closest('[data-shiny]')) { sheet.shiny = !sheet.shiny; return renderSheet(true); }
+    const vb = e.target.closest('[data-variant]');
+    if (vb) {
+      const v = sheet.p.variants.find(x => x.id === vb.dataset.variant);
+      sheet.variant = sheet.variant === v ? null : v;
+      renderSheet(true);
+      return $('#sheetbody').scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    const fig = e.target.closest('.stage') && $('#sheetbody .fig');
+    if (fig && !fig.classList.contains('spin')) {
+      fig.classList.add('spin');
+      fig.addEventListener('animationend', () => fig.classList.remove('spin'), { once: true });
+    }
+  });
 }
 
 function wire() {
-  document.querySelector('.tabs').addEventListener('click', e => { if (e.target.dataset.tab) selectTab(e.target.dataset.tab); });
-  $('#q').addEventListener('input', onQuery);
-  $('#q').addEventListener('keydown', e => {
-    if (e.key === 'Enter') { const first = search($('#q').value)[0]; if (first) showResult(first); }
+  document.querySelector('.dex-nav').addEventListener('click', e => {
+    const b = e.target.closest('[data-view]');
+    if (b) selectView(b.dataset.view);
   });
-  $('#suggest').addEventListener('click', e => { if (e.target.dataset.pick) showResult(byN.get(+e.target.dataset.pick)); });
 
-  $('#cats').innerHTML = CATS.map(c => `<button data-cat="${c.id}" aria-pressed="${c === cat}">${c.label}</button>`).join('');
-  $('#cats').addEventListener('click', e => {
-    const c = CATS.find(x => x.id === e.target.dataset.cat);
-    if (!c) return;
-    cat = c;
-    for (const b of $('#cats').children) b.setAttribute('aria-pressed', b.dataset.cat === c.id);
-    renderGrid();
+  $('#cat').innerHTML = CATS.map(c => `<option value="${c.id}">${c.label}</option>`).join('');
+  $('#cat').addEventListener('change', e => setCat(e.target.value));
+  $('#type').insertAdjacentHTML('beforeend', Object.keys(TYPES).map(t => `<option value="${t}">${TYPES[t]}</option>`).join(''));
+  for (const id of ['#q', '#gen', '#type', '#missing', '#regional']) $(id).addEventListener('input', renderGrid);
+  $('#q').addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.target.blur();
+    if (visible.length === 1) openSheet(byN.get(visible[0]));
   });
-  for (const id of ['#filter', '#gen', '#missing', '#showall']) $(id).addEventListener('input', renderGrid);
 
   $('#grid').addEventListener('click', e => {
     const tile = e.target.closest('.tile');
     if (!tile) return;
     const p = byN.get(+tile.dataset.n);
-    if (e.target.closest('.info') || cat.variant) return openDialog(p);
+    if (!$('#quick').checked || cat.variant || !inCategory(p)) return openSheet(p);
     const key = `${p.n}:${cat.id}`;
     set(key, !has(key));
-    renderGrid();
+    if ($('#missing').checked) return renderGrid();
+    tile.classList.toggle('done', has(key)); // zonder de hele lijst opnieuw op te bouwen
+    const [d, t] = $('#progresstext').textContent.match(/\d+/g).map(Number);
+    const nd = d + (has(key) ? 1 : -1);
+    $('#bar').style.width = (100 * nd / t) + '%';
+    $('#progresstext').textContent = `${cat.label}: ${nd} / ${t} · ${Math.round(100 * nd / t)}%`;
   });
 
-  // Vinkjes in detailkaarten (opzoek-tabblad en dialoog).
+  // Detailscherm
+  wireStage();
+  $('#close').addEventListener('click', () => history.back());
+  for (const id of ['#prev', '#next']) $(id).addEventListener('click', e => {
+    const n = +e.currentTarget.dataset.n;
+    if (n) openSheet(byN.get(n));
+  });
+  addEventListener('popstate', closeSheet);
+  addEventListener('keydown', e => { if (e.key === 'Escape' && sheet) history.back(); });
   document.addEventListener('change', e => {
-    if (e.target.dataset.key) set(e.target.dataset.key, e.target.checked);
+    if (!e.target.dataset.key) return;
+    set(e.target.dataset.key, e.target.checked);
+    gridDirty = true;
   });
-  $('#dlg').addEventListener('click', e => { if (e.target.closest('[data-close]') || e.target === $('#dlg')) $('#dlg').close(); });
-  $('#dlg').addEventListener('close', () => { renderGrid(); if (current) showResult(current); });
 
+  // Live
+  document.querySelector('.seg').addEventListener('click', e => {
+    if (e.target.dataset.live) { liveTab = e.target.dataset.live; renderLive(); }
+  });
+  $('#livebody').addEventListener('click', e => {
+    if (e.target.closest('#retry')) return loadLive();
+    const c = e.target.closest('.lcard');
+    if (c && c.dataset.n && byN.has(+c.dataset.n)) openSheet(byN.get(+c.dataset.n));
+  });
+  $('#livestate').addEventListener('click', () => selectView('live'));
+
+  // Voortgang
+  $('#stats').addEventListener('click', e => {
+    const b = e.target.closest('[data-cat]');
+    if (b) { setCat(b.dataset.cat); selectView('dex'); }
+  });
   $('#export').addEventListener('click', () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(state)], { type: 'application/json' }));
@@ -274,34 +519,24 @@ function wire() {
       for (const k of Object.keys(data)) if (data[k]) state[k] = 1;
       save();
       renderGrid();
-      if (current) showResult(current);
+      renderStats();
     } catch (err) {
       alert('Importeren mislukt: ' + err.message);
     }
   });
 }
 
-async function loadLive() {
-  try {
-    const [raids, eggs, research] = await Promise.all(['raids', 'eggs', 'research'].map(async f => {
-      const r = await fetch(`${LIVE}${f}.min.json`);
-      if (!r.ok) throw new Error(r.status);
-      return r.json();
-    }));
-    live = { raids, eggs, research };
-  } catch {
-    live = false;
-  }
-  if (current) showResult(current);
-}
-
 (async () => {
   try {
-    const r = await fetch('data.json');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    DATA = await r.json();
+    const [d, r] = await Promise.all(['data.json', 'regions.json'].map(async f => {
+      const res = await fetch(f);
+      if (!res.ok) throw new Error(`${f}: HTTP ${res.status}`);
+      return res.json();
+    }));
+    DATA = d;
+    REG = r;
   } catch (err) {
-    $('#result').innerHTML = `<p>Pokémon-data kon niet geladen worden (${esc(err.message)}).</p>`;
+    $('#grid').innerHTML = `<p class="empty">Pokémon-data kon niet geladen worden (${esc(err.message)}).</p>`;
     return;
   }
   for (const p of DATA.pokemon) {
@@ -309,9 +544,11 @@ async function loadLive() {
     byN.set(p.n, p);
   }
   const gens = [...new Set(DATA.pokemon.map(p => p.gen))].sort((a, b) => a - b);
-  $('#gen').insertAdjacentHTML('beforeend', gens.map(g => `<option value="${g}">Generatie ${g}</option>`).join(''));
-  $('#foot').innerHTML = `Momentopname van de data: ${esc(DATA.built)} (bronnen: pokemon-go-api, PoGoAPI.net; live: LeekDuck via ScrapedDuck). ` +
-    'Je vinkjes worden alleen in deze browser bewaard — gebruik Exporteren voor een back-up.';
+  $('#gen').insertAdjacentHTML('beforeend', gens.map(g => `<option value="${g}">Gen ${g}</option>`).join(''));
+  $('#foot').textContent = `Data van ${DATA.built} · bronnen: pokemon-go-api, PoGoAPI.net, LeekDuck (ScrapedDuck), PokeAPI-sprites. ` +
+    'Regionale gegevens zijn met de hand bijgehouden. Niet verbonden aan Niantic of The Pokémon Company.';
   wire();
+  renderGrid();
   loadLive();
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

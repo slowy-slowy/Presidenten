@@ -25,10 +25,10 @@ const type = t => (t ? t.type.replace('POKEMON_TYPE_', '').toLowerCase() : null)
 const CLASS = { POKEMON_CLASS_LEGENDARY: 'legendary', POKEMON_CLASS_MYTHIC: 'mythical', POKEMON_CLASS_ULTRA_BEAST: 'ultrabeast' };
 
 (async () => {
-  const [dex, released, shiny, shadow, raidEx, nests, babies, ditto, megas, cdays, researchEx] = await Promise.all([
+  const [dex, released, shiny, shadow, raidEx, nests, babies, ditto, megas, researchEx] = await Promise.all([
     load(POKEDEX),
     ...['released_pokemon', 'shiny_pokemon', 'shadow_pokemon', 'raid_exclusive_pokemon', 'nesting_pokemon',
-      'baby_pokemon', 'possible_ditto_pokemon', 'mega_pokemon', 'community_days', 'research_task_exclusive_pokemon']
+      'baby_pokemon', 'possible_ditto_pokemon', 'mega_pokemon', 'research_task_exclusive_pokemon']
       .map(f => load(`${POGOAPI}${f}.json`)),
   ]);
 
@@ -37,8 +37,6 @@ const CLASS = { POKEMON_CLASS_LEGENDARY: 'legendary', POKEMON_CLASS_MYTHIC: 'myt
   const researchSet = idSet(researchEx);
   const megaById = {};
   for (const m of megas) (megaById[m.pokemon_id] ||= []).push(m.mega_name);
-  const cdByName = {};
-  for (const c of cdays) for (const n of c.boosted_pokemon) (cdByName[n] ||= []).push(c.start_date);
 
   const evoFrom = {};
   for (const p of dex) for (const e of p.evolutions || []) {
@@ -90,7 +88,6 @@ const CLASS = { POKEMON_CLASS_LEGENDARY: 'legendary', POKEMON_CLASS_MYTHIC: 'myt
     const megaNames = megaById[p.dexNr] || (p.hasMegaEvolution ? Object.values(p.megaEvolutions || {}).map(m => m.names.English) : null);
     if (megaNames && megaNames.length) o.mega = megaNames;
     if (p.hasGigantamaxEvolution) o.gmax = true;
-    if (cdByName[p.names.English]) o.cd = cdByName[p.names.English];
     if (evoFrom[p.id]) o.evo = evoFrom[p.id];
     if (variants.length) o.variants = variants;
     return o;
