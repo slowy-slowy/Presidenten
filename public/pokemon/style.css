@@ -266,3 +266,58 @@ h2, h3, p { margin: 0; }
 .syncline { display: flex; align-items: center; gap: 8px; font-weight: 700; }
 .syncline i { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
 .syncline.ok i { background: var(--done); } .syncline.err i { background: var(--bad); }
+
+/* ---------- Bediening in Pokédex-stijl: toetsen met een rand, invoer als lcd-schermpje ---------- */
+:root { --edge: #23252d; --lcd: #cfeeda; --lcd-text: #143524; --blue-key: #2a75bb; --yellow: #ffd83b; --yellow-text: #3a2a00; --key-dark: #3a3d48; --led-off: #8a8f9c; --led-on: #4ff07a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --edge: #4a5060; --lcd: #10261b; --lcd-text: #9be8b4; } }
+:root[data-theme="dark"] { --edge: #4a5060; --lcd: #10261b; --lcd-text: #9be8b4; }
+
+.searchbar { display: flex; align-items: center; gap: 10px; margin: -2px 0 12px; padding: 7px 10px 7px 9px; border-radius: 14px;
+  background: var(--bezel); box-shadow: 0 4px 0 #0006, inset 0 1px 0 #fff2; }
+.searchbar::before { content: ""; flex: none; width: 26px; height: 26px; border-radius: 50%; border: 3px solid #fff;
+  background: radial-gradient(circle at 32% 28%, #fff 0 9%, #9be3ff 10% 22%, #2aa7e8 45%, #0b5fa8 80%); }
+.searchbar input { flex: 1; min-width: 0; height: 40px; padding: 0 12px; border-radius: 6px; border: 2px solid #0009; background: var(--lcd);
+  color: var(--lcd-text); font-family: var(--mono); font-weight: 600; font-size: 17px; box-shadow: inset 0 2px 5px #0004; }
+.searchbar input::placeholder { color: var(--lcd-text); opacity: .6; }
+.searchbar input:focus { border-color: var(--yellow); }
+
+.filters { padding-bottom: 6px; }
+.pill { height: 40px; border-radius: 10px; border: 2px solid var(--edge); background: var(--card); box-shadow: 0 3px 0 var(--edge); font-family: var(--display); font-size: 14.5px; }
+.pill:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--edge); }
+.pill.sel:first-child { background: var(--blue-key); border-color: var(--edge); color: #fff; }
+.pill.sel:first-child > span { color: #fffc; }
+.pill.sel:first-child select { color: #fff; }
+.pill select option { color: var(--text); background: var(--card); }
+.pill.tog > span { line-height: 36px; border-radius: 8px; }
+.pill.tog:has(:checked) { background: var(--yellow); border-color: var(--edge); color: var(--yellow-text); }
+.pill.qc[aria-pressed=true] { background: var(--done); border-color: var(--edge); color: #fff; transform: translateY(2px); box-shadow: 0 1px 0 var(--edge); }
+
+.progress { height: 28px; border: 2px solid var(--edge); border-radius: 8px; background: var(--lcd); box-shadow: inset 0 2px 4px #0003; }
+#bar { opacity: 1; background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--led-on) 55%, transparent) 0 10px, color-mix(in srgb, var(--led-on) 35%, transparent) 10px 12px); }
+#progresstext { color: var(--lcd-text); font-family: var(--mono); font-size: 13px; }
+
+.switch { width: 52px; height: 28px; border-radius: 8px; background: var(--bezel); box-shadow: inset 0 2px 3px #0008, 0 0 0 2px var(--edge); }
+.switch::after { top: 4px; left: 4px; border-radius: 5px; background: #e7e9ee; }
+.quick input:checked + .switch { background: var(--done); }
+.quick input:checked + .switch::after { transform: translateX(24px); background: var(--yellow); }
+
+.seg { gap: 5px; padding: 5px; border: 0; border-radius: 12px; background: var(--bezel); box-shadow: 0 4px 0 #0006; }
+.seg button { border-radius: 8px; background: var(--key-dark); color: #fffc; font-family: var(--display); }
+.seg [aria-selected=true] { background: var(--red); color: #fff; box-shadow: inset 0 -3px 0 #0005; }
+
+.btn { border-radius: 10px; background: var(--blue-key); border: 2px solid var(--edge); box-shadow: 0 4px 0 var(--edge); font-family: var(--display); }
+.btn:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--edge); }
+
+.checks { gap: 9px 7px; }
+.check span { border: 2px solid var(--edge); border-radius: 10px; background: var(--card); box-shadow: 0 3px 0 var(--edge); font-family: var(--display); }
+.check span::before { width: 14px; height: 14px; border: 2px solid var(--edge); background: var(--led-off); }
+.check input:checked + span { transform: translateY(2px); box-shadow: 0 1px 0 var(--edge); border-color: var(--edge); }
+.check input:checked + span::before { border-color: var(--edge); background: var(--led-on); box-shadow: 0 0 8px var(--led-on); }
+.vrow .check span::before { width: 11px; height: 11px; }
+
+.tile, .lcard, .stat { box-shadow: 0 3px 0 var(--line); }
+.stat .sl { font-family: var(--display); }
+.stat .sb { height: 9px; border-radius: 3px; background: var(--lcd); box-shadow: inset 0 0 0 1px var(--edge); }
+.stat .sb i { border-radius: 0; background: var(--led-on); }
+.shinybtn { border-radius: 10px; font-family: var(--display); box-shadow: 0 3px 0 #0006; }
+.checks + p { margin-top: 12px; }

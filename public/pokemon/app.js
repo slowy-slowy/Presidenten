@@ -38,6 +38,8 @@ const WEATHER = [
   ['💨 Wind', ['dragon', 'flying', 'psychic']], ['❄️ Sneeuw', ['ice', 'steel']], ['🌫️ Mist', ['dark', 'ghost']],
 ];
 const SHINY_VIA = { wild: 'in het wild', raid: 'raids', egg: 'eieren', research: 'research', evolution: 'evolutie', photobomb: 'snapshot' };
+const GEN = { 1: 'Kanto', 2: 'Johto', 3: 'Hoenn', 4: 'Sinnoh', 5: 'Unova', 6: 'Kalos', 7: 'Alola', 8: 'Galar', 9: 'Paldea' };
+const genLabel = g => `Gen ${g}${GEN[g] ? ' · ' + GEN[g] : ''}`;
 const CLS = { legendary: 'Legendarisch', mythical: 'Mythisch', ultrabeast: 'Ultra Beast' };
 
 const $ = s => document.querySelector(s);
@@ -255,7 +257,7 @@ function detailHTML() {
   const types = p.types.map(t => `<span class="type" style="--t:${TYPE_COLOR[t]}">${TYPES[t] || t}</span>`).join('');
   const r = region(p);
   const facts = [
-    `<span class="fact">Gen ${p.gen}</span>`,
+    `<span class="fact">${genLabel(p.gen)}</span>`,
     p.cls ? `<span class="fact gold">${CLS[p.cls]}</span>` : '',
     r ? `<span class="fact reg">📍 ${r.partial ? 'Regionale vormen' : 'Regionaal'}</span>` : '<span class="fact">🌐 Wereldwijd</span>',
     p.released ? '' : '<span class="fact no">Nog niet in GO</span>',
@@ -634,7 +636,7 @@ function wire() {
     byN.set(p.n, p);
   });
   const gens = [...new Set(DATA.pokemon.map(p => p.gen))].sort((a, b) => a - b);
-  $('#gen').insertAdjacentHTML('beforeend', gens.map(g => `<option value="${g}">Gen ${g}</option>`).join(''));
+  $('#gen').insertAdjacentHTML('beforeend', gens.map(g => `<option value="${g}">${genLabel(g)}</option>`).join(''));
   $('#foot').textContent = `Data van ${DATA.built} · bronnen: pokemon-go-api, PoGoAPI.net, LeekDuck (ScrapedDuck), PokeAPI-sprites. ` +
     'Regionale gegevens zijn met de hand bijgehouden. Niet verbonden aan Niantic of The Pokémon Company.';
   wire();
