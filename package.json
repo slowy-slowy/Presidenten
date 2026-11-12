@@ -4,7 +4,8 @@
   "description": "Multiplayer Presidenten spel met 2 als joker",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "pokemon:data": "node scripts/build-pokemon-data.js"
   },
   "dependencies": {
     "express": "^4.18.2",

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pokémon GO Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Pokémon GO Dashboard</h1>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="zoek" aria-selected="true">Opzoeken</button>
+      <button role="tab" data-tab="boek" aria-selected="false">Afvinkboek</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tab-zoek">
+      <label class="search">
+        <span>Naam of Pokédex-nummer</span>
+        <input id="q" type="search" placeholder="bv. Pikachu of 25" autocomplete="off" autofocus>
+      </label>
+      <div id="suggest" class="suggest"></div>
+      <div id="result"><p class="muted">Typ een naam of nummer om te zien welke Pokémon het is en hoe je die in Pokémon GO kunt krijgen.</p></div>
+    </section>
+
+    <section id="tab-boek" hidden>
+      <div id="cats" class="chips" aria-label="Categorie"></div>
+      <div class="toolbar">
+        <input id="filter" type="search" placeholder="Filter op naam of nummer" autocomplete="off">
+        <select id="gen" aria-label="Generatie"><option value="">Alle generaties</option></select>
+        <label><input id="missing" type="checkbox"> Alleen ontbrekende</label>
+        <label title="Toon ook Pokémon die volgens de data (nog) niet in deze categorie bestaan"><input id="showall" type="checkbox"> Toon alles</label>
+        <span class="spacer"></span>
+        <button id="export">Exporteren</button>
+        <button id="import">Importeren</button>
+        <input id="importfile" type="file" accept="application/json" hidden>
+      </div>
+      <div class="progress"><div id="bar"></div><span id="progresstext"></span></div>
+      <p id="cathint" class="muted"></p>
+      <div id="grid" class="grid"></div>
+    </section>
+  </main>
+
+  <dialog id="dlg"><button class="close" data-close aria-label="Sluiten">×</button><div id="dlgbody"></div></dialog>
+
+  <footer class="muted" id="foot"></footer>
+  <script src="app.js"></script>
+</body>
+</html>
